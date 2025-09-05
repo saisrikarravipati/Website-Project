@@ -1,1 +1,39 @@
 
+from pyspark.sql.functions import udf
+from pyspark.sql.types import StringType
+
+# Step 1: Build dictionary once (copy mappings from your reference table)
+tq_desc_map = {
+    "TQ880": "Validation of Network Recon",
+    "TQ882": "Validation of Bad Debt",
+    "TQ883": "Validation of Admin Fee",
+    "TQ884": "Validation of Specialty Cogs",
+    "TQ885": "Validation of Min Gtee",
+    # ... add other mappings
+}
+
+# Step 2: Register UDF to map TQ_CD → Description
+@udf(returnType=StringType())
+def map_tq_desc(tq_cd):
+    return tq_desc_map.get(tq_cd, tq_cd)   # fallback to code if not found
+
+# Step 3: Replace column in your DF
+ce_regression_summary_daily_result = (
+    ce_regression_summary_daily_result
+    .withColumn("TEST_DESC", map_tq_desc(F.col("TQ_CD")))
+    .drop("TQ_CD")  # drop if you don’t want codes
+)
+
+# Step 4: Convert to Pandas for email
+pdf = ce_regression_summary_daily_result.toPandas()
+
+html_table = pdf.to_html(index=False, border=1, justify="center")
+html_body = f"""
+<html>
+  <body>
+    <h3>QAAP Daily Regression – Integrated Tests</h3>
+    <p>Rows: {len(pdf)}</p>
+    {html_table}
+  </body>
+</html>
+"""
