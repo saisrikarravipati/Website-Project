@@ -1,0 +1,72 @@
+from pyspark.sql import functions as F
+import pandas as pd
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
+
+# --- 1) Build a compact table for email (limit rows to avoid driver OOM) ---
+COLUMNS = [
+    "RUN_ID","TQ_CD","TS_CTG","PARENT_REQUEST_ID","LOB","APP_ID",
+    "REQUEST_ID","TASK_ID","EXECUTION_STATUS","TS_STATUS",
+    "TOTAL_CNT","SUCCESS_CNT","FAILURE_CNT","RUN_DATE_TS"
+]
+
+# If you've already done the select(), this will just project/order/limit for email
+email_df = (ce_regression_summary_daily_result
+            .select(*COLUMNS)
+            .orderBy(F.col("RUN_ID").desc(), F.col("TQ_CD").asc())
+            .limit(1000))                              # adjust if you need more/less
+
+pdf = email_df.toPandas()
+# Make timestamps readable
+if "RUN_DATE_TS" in pdf.columns:
+    pdf["RUN_DATE_TS"] = pdf["RUN_DATE_TS"].astype(str)
+
+# HTML table for the body
+html_table = pdf.to_html(index=False, border=1, justify="center")
+html_body = f"""
+<html>
+  <body>
+    <h3>QAAP Daily Regression – Integrated Tests</h3>
+    <p>Rows: {len(pdf)}</p>
+    {html_table}
+  </body>
+</html>
+"""
+
+# CSV attachment bytes
+csv_bytes = pdf.to_csv(index=False).encode("utf-8")
+
+# --- 2) Email helper that sends HTML body + CSV attachment ---
+def send_email_df(recipients, subject, html_body, csv_bytes,
+                  csv_name="ce_regression_summary_daily_result.csv",
+                  sender="no-reply@databricks.local", smtp_host="smtpaz.corp.cvscaremark.com", smtp_port=25):
+    msg = MIMEMultipart()
+    msg["Subject"] = subject
+    msg["From"] = sender
+    msg["To"] = ", ".join(recipients)
+
+    # HTML body
+    msg.attach(MIMEText(html_body, "html"))
+
+    # CSV attachment
+    part = MIMEApplication(csv_bytes, Name=csv_name)
+    part["Content-Disposition"] = f'attachment; filename="{csv_name}"'
+    msg.attach(part)
+
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.starttls()            # remove if your relay doesn't allow TLS
+            server.sendmail(sender, recipients, msg.as_string())
+        print("Email sent successfully!")
+    except Exception as e:
+        print(f"Error sending email: {e}")
+
+# --- 3) Send it ---
+send_email_df(
+    recipients=["you@example.com"],       # <-- fill in
+    subject="QAAP Daily Regression – Integrated Tests",
+    html_body=html_body,
+    csv_bytes=csv_bytes
+)
